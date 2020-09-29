@@ -25,9 +25,9 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import javax.servlet.ServletException;
 
+import hudson.Main;
 import hudson.model.ItemGroup;
 import hudson.util.XStream2;
-import io.fabric8.openshift.client.OpenShiftClient;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.lang.StringUtils;
 import org.csanchez.jenkins.plugins.kubernetes.pipeline.PodTemplateMap;
@@ -104,6 +104,7 @@ public class KubernetesCloud extends Cloud {
     @Nonnull
     private List<PodTemplate> templates = new ArrayList<>();
     private String serverUrl;
+    private boolean useJenkinsProxy;
     @CheckForNull
     private String serverCertificate;
 
@@ -141,6 +142,7 @@ public class KubernetesCloud extends Cloud {
     @DataBoundConstructor
     public KubernetesCloud(String name) {
         super(name);
+        setMaxRequestsPerHost(DEFAULT_MAX_REQUESTS_PER_HOST);
     }
 
     /**
@@ -177,6 +179,10 @@ public class KubernetesCloud extends Cloud {
         setReadTimeout(readTimeout);
 
     }
+
+    public boolean isUseJenkinsProxy() { return useJenkinsProxy; }
+    @DataBoundSetter
+    public void setUseJenkinsProxy(boolean useJenkinsProxy) { this.useJenkinsProxy = useJenkinsProxy; }
 
     public boolean isUsageRestricted() {
         return usageRestricted;
@@ -581,7 +587,7 @@ public class KubernetesCloud extends Cloud {
      */
     private boolean addProvisionedSlave(@Nonnull PodTemplate template, @CheckForNull Label label, int scheduledCount) throws Exception {
         if (containerCap == 0) {
-            return true;
+            return false;
         }
 
         KubernetesClient client = connect();
@@ -641,6 +647,11 @@ public class KubernetesCloud extends Cloud {
      */
     public PodTemplate getTemplate(@CheckForNull Label label) {
         return PodTemplateUtils.getTemplateByLabel(label, getAllTemplates());
+    }
+
+    @CheckForNull
+    public PodTemplate getTemplateById(@Nonnull String id) {
+        return getAllTemplates().stream().filter(t -> id.equals(t.getId())).findFirst().orElse(null);
     }
 
     /**
@@ -730,12 +741,16 @@ public class KubernetesCloud extends Cloud {
                 Objects.equals(credentialsId, that.credentialsId) &&
                 Objects.equals(podLabels, that.podLabels) &&
                 Objects.equals(podRetention, that.podRetention) &&
-                Objects.equals(waitForPodSec, that.waitForPodSec);
+                Objects.equals(waitForPodSec, that.waitForPodSec) &&
+                useJenkinsProxy==that.useJenkinsProxy;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(defaultsProviderTemplate, templates, serverUrl, serverCertificate, skipTlsVerify, addMasterProxyEnvVars, capOnlyOnAlivePods, namespace, jenkinsUrl, jenkinsTunnel, credentialsId, containerCap, retentionTimeout, connectTimeout, readTimeout, podLabels, usageRestricted, maxRequestsPerHost, podRetention);
+        return Objects.hash(defaultsProviderTemplate, templates, serverUrl, serverCertificate, skipTlsVerify,
+                addMasterProxyEnvVars, capOnlyOnAlivePods, namespace, jenkinsUrl, jenkinsTunnel, credentialsId,
+                containerCap, retentionTimeout, connectTimeout, readTimeout, podLabels, usageRestricted,
+                maxRequestsPerHost, podRetention, useJenkinsProxy);
     }
 
     public Integer getWaitForPodSec() {
@@ -953,6 +968,7 @@ public class KubernetesCloud extends Cloud {
                 ", maxRequestsPerHost=" + maxRequestsPerHost +
                 ", waitForPodSec=" + waitForPodSec +
                 ", podRetention=" + podRetention +
+                ", useJenkinsProxy=" + useJenkinsProxy +
                 '}';
     }
 
@@ -988,6 +1004,19 @@ public class KubernetesCloud extends Cloud {
         @Override
         public List<PodTemplate> getList(@Nonnull KubernetesCloud cloud) {
             return cloud.getTemplates();
+        }
+    }
+
+    @Initializer(after = InitMilestone.SYSTEM_CONFIG_LOADED)
+    public static void hpiRunInit() {
+        if (Main.isDevelopmentMode) {
+            Jenkins jenkins = Jenkins.get();
+            String hostAddress = System.getProperty("jenkins.host.address");
+            if (hostAddress != null && jenkins.clouds.getAll(KubernetesCloud.class).isEmpty()) {
+                KubernetesCloud cloud = new KubernetesCloud("kubernetes");
+                cloud.setJenkinsUrl("http://" + hostAddress + ":8080/jenkins/");
+                jenkins.clouds.add(cloud);
+            }
         }
     }
 }

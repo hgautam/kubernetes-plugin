@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -14,6 +15,8 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.hash.HashFunction;
+import com.google.common.hash.Hashing;
 
 import hudson.model.AbstractDescribableImpl;
 import hudson.model.Descriptor;
@@ -67,6 +70,13 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
      */
     public static final Integer DEFAULT_SLAVE_JENKINS_CONNECTION_TIMEOUT = Integer
             .getInteger(PodTemplate.class.getName() + ".connectionTimeout", 100);
+
+    /**
+     * Digest function that is used to compute the kubernetes label "jenkins/label-digest"
+     */
+    public static final HashFunction LABEL_DIGEST_FUNCTION = Hashing.sha1();
+
+    private String id;
 
     private String inheritFrom;
 
@@ -146,6 +156,11 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
      */
     private transient List<String> yamls;
 
+    @Nonnull
+    public String getId() {
+        return id;
+    }
+
     public YamlMergeStrategy getYamlMergeStrategy() {
         return yamlMergeStrategy;
     }
@@ -172,8 +187,17 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     @CheckForNull
     private PodRetention podRetention = PodRetention.getPodTemplateDefault();
 
-    @DataBoundConstructor
     public PodTemplate() {
+        this((String) null);
+    }
+
+    @DataBoundConstructor
+    public PodTemplate(@CheckForNull String id) {
+        if (Util.fixEmpty(id) == null) {
+            this.id = UUID.randomUUID().toString();
+        } else {
+            this.id = id;
+        }
     }
 
     public PodTemplate(PodTemplate from) {
@@ -198,6 +222,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
 
     @Restricted(NoExternalUse.class) // testing only
     PodTemplate(String name, List<? extends PodVolume> volumes, List<? extends ContainerTemplate> containers) {
+        this();
         this.name = name;
         this.volumes.addAll(volumes);
         this.containers.addAll(containers);
@@ -395,7 +420,17 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     }
 
     public Map<String, String> getLabelsMap() {
-        return ImmutableMap.of("jenkins/label", label == null ? DEFAULT_LABEL : sanitizeLabel(label));
+        if (label == null) {
+            return ImmutableMap.of(
+                    "jenkins/label", DEFAULT_LABEL,
+                    "jenkins/label-digest", "0"
+            );
+        } else {
+            return ImmutableMap.of(
+                    "jenkins/label", sanitizeLabel(label),
+                    "jenkins/label-digest", LABEL_DIGEST_FUNCTION.hashString(label).toString()
+            );
+        }
     }
 
     static String sanitizeLabel(String input) {
@@ -495,8 +530,8 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
         this.hostNetwork = hostNetwork;
     }
 
-    public Boolean isHostNetwork() {
-        return hostNetwork;
+    public boolean isHostNetwork() {
+        return isHostNetworkSet()?hostNetwork.booleanValue():false;
     }
 
     public boolean isHostNetworkSet() {
@@ -821,6 +856,9 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
         if (yamlMergeStrategy == null) {
             yamlMergeStrategy = YamlMergeStrategy.defaultStrategy();
         }
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
 
         return this;
     }
@@ -906,6 +944,19 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     @Extension
     public static class DescriptorImpl extends Descriptor<PodTemplate> {
 
+        static final String[] STRING_FIELDS = {
+                "activeDeadlineSeconds",
+                "idleMinutes",
+                "instanceCap",
+                "slaveConnectTimeout",
+        };
+
+        public DescriptorImpl() {
+            for (String field : STRING_FIELDS) {
+                addHelpFileRedirect(field + "Str", PodTemplate.class, field);
+            }
+        }
+
         @Override
         public String getDisplayName() {
             return "Kubernetes Pod Template";
@@ -939,6 +990,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     @Override
     public String toString() {
         return "PodTemplate{" +
+                (id == null ? "" : "id='" + id + '\'') +
                 (inheritFrom == null ? "" : "inheritFrom='" + inheritFrom + '\'') +
                 (name == null ? "" : ", name='" + name + '\'') +
                 (namespace == null ? "" : ", namespace='" + namespace + '\'') +

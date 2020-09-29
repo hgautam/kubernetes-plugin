@@ -46,6 +46,7 @@ import com.gargoylesoftware.htmlunit.html.HtmlPage;
 import hudson.model.Label;
 import hudson.model.Run;
 import hudson.slaves.SlaveComputer;
+import hudson.util.VersionNumber;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodList;
 import io.fabric8.kubernetes.client.KubernetesClientException;
@@ -480,6 +481,7 @@ public class KubernetesPipelineTest extends AbstractKubernetesPipelineTest {
     }
 
     @Test
+    @Ignore
     public void computerCantBeConfigured() throws Exception {
         r.jenkins.setSecurityRealm(r.createDummySecurityRealm());
         r.jenkins.setAuthorizationStrategy(new MockAuthorizationStrategy().
@@ -489,12 +491,17 @@ public class KubernetesPipelineTest extends AbstractKubernetesPipelineTest {
         assertTrue(optionalNode.isPresent());
         KubernetesSlave node = optionalNode.get();
 
-        JenkinsRule.WebClient wc = r.createWebClient().login("admin");
+        JenkinsRule.WebClient wc = r.createWebClient();
         wc.getOptions().setPrintContentOnFailingStatusCode(false);
+        wc.login("admin");
 
         HtmlPage nodeIndex = wc.getPage(node);
         assertNotXPath(nodeIndex, "//*[text() = 'configure']");
-        wc.assertFails(node.toComputer().getUrl()+"configure", 403);
+        if (Jenkins.get().getVersion().isNewerThanOrEqualTo(new VersionNumber("2.238"))) {
+            r.assertXPath(nodeIndex, "//*[text() = 'View Configuration']");
+        } else {
+            wc.assertFails(node.toComputer().getUrl()+"configure", 403);
+        }
         SemaphoreStep.success("pod/1", null);
     }
 
@@ -624,6 +631,13 @@ public class KubernetesPipelineTest extends AbstractKubernetesPipelineTest {
             assumeNoException("was not permitted to list pvcs, so presumably cannot run test either", x);
         }
         r.assertBuildStatusSuccess(r.waitForCompletion(b));
+    }
+
+    @Test
+    public void invalidPodGetsCancelled() throws Exception {
+        r.assertBuildStatus(Result.FAILURE, r.waitForCompletion(b));
+        r.assertLogContains("ERROR: Unable to create pod", b);
+        r.assertLogContains("ERROR: Queue task was cancelled", b);
     }
 
     private <R extends Run> R assertBuildStatus(R run, Result... status) throws Exception {

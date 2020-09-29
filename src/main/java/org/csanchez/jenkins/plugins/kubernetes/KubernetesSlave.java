@@ -76,6 +76,8 @@ public class KubernetesSlave extends AbstractCloudSlave {
 
     private final String cloudName;
     private String namespace;
+    @Nonnull
+    private String podTemplateId;
     private transient PodTemplate template;
     private transient Set<Queue.Executable> executables = new HashSet<>();
 
@@ -85,11 +87,17 @@ public class KubernetesSlave extends AbstractCloudSlave {
     @Nonnull
     public PodTemplate getTemplate() {
         // Look up updated pod template after a restart
+        PodTemplate template = getTemplateOrNull();
         if (template == null) {
-            template = getKubernetesCloud().getTemplate(Label.get(Util.fixEmpty(getLabelString())));
-            if (template == null) {
-                throw new IllegalStateException("Not expecting pod template to be null at this point");
-            }
+            throw new IllegalStateException("Not expecting pod template to be null at this point");
+        }
+        return template;
+    }
+
+    @CheckForNull
+    public PodTemplate getTemplateOrNull() {
+        if (template == null) {
+            template = getKubernetesCloud().getTemplateById(podTemplateId);
         }
         return template;
     }
@@ -146,6 +154,7 @@ public class KubernetesSlave extends AbstractCloudSlave {
         setNodeProperties(template.getNodeProperties());
         this.cloudName = cloudName;
         this.template = template;
+        this.podTemplateId = template.getId();
     }
 
     public String getCloudName() {

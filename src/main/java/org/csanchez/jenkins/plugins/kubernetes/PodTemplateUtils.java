@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -375,7 +376,7 @@ public class PodTemplateUtils {
         PodTemplateToolLocation toolLocationNodeProperties = parent.getNodeProperties();
         toolLocationNodeProperties.addAll(template.getNodeProperties());
 
-        PodTemplate podTemplate = new PodTemplate();
+        PodTemplate podTemplate = new PodTemplate(template.getId());
         podTemplate.setName(name);
         podTemplate.setNamespace(!Strings.isNullOrEmpty(template.getNamespace()) ? template.getNamespace() : parent.getNamespace());
         podTemplate.setLabel(label);
@@ -417,7 +418,11 @@ public class PodTemplateUtils {
 
         podTemplate.setSupplementalGroups(template.getSupplementalGroups() != null ? template.getSupplementalGroups() : parent.getSupplementalGroups());
 
-        podTemplate.setHostNetwork(template.isHostNetworkSet() ? template.isHostNetwork() : parent.isHostNetwork());
+        if (template.isHostNetworkSet()) {
+            podTemplate.setHostNetwork(template.isHostNetwork());
+        } else if (parent.isHostNetworkSet()) {
+            podTemplate.setHostNetwork(parent.isHostNetwork());
+        }
 
         List<String> yamls = new ArrayList<>(parent.getYamls());
         yamls.addAll(template.getYamls());

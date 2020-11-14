@@ -37,6 +37,7 @@ import org.hamcrest.Matcher;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.jvnet.hudson.test.FlagRule;
 import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.LoggerRule;
@@ -80,6 +81,9 @@ public class PodTemplateBuilderTest {
     @Rule
     public LoggerRule logs = new LoggerRule().record(Logger.getLogger(KubernetesCloud.class.getPackage().getName()),
             Level.ALL);
+
+    @Rule
+    public FlagRule<String> dockerPrefix = new FlagRule<>(() -> DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX, prefix -> DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX = prefix);
 
     @Spy
     private KubernetesCloud cloud = new KubernetesCloud("test");
@@ -152,6 +156,44 @@ public class PodTemplateBuilderTest {
         assertNotNull(container0.getResources().getLimits());
         assertThat(container0.getResources().getRequests(), hasEntry("example.com/dongle", new Quantity("42")));
         assertThat(container0.getResources().getLimits(), hasEntry("example.com/dongle", new Quantity("42")));
+    }
+
+    @Test
+    @TestCaseName("{method}(directConnection={0})")
+    @Parameters({ "true", "false" })
+    public void testValidateDockerRegistryPrefixOverride(boolean directConnection) throws Exception {
+        cloud.setDirectConnection(directConnection);
+        DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX = "jenkins.docker.com/docker-hub";
+        PodTemplate template = new PodTemplate();
+        template.setYaml(loadYamlFile("pod-busybox.yaml"));
+        setupStubs();
+        Pod pod = new PodTemplateBuilder(template).withSlave(slave).build();
+        // check containers
+        Map<String, Container> containers = toContainerMap(pod);
+        assertEquals(2, containers.size());
+
+        assertEquals("busybox", containers.get("busybox").getImage());
+        assertEquals(DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX + "/" + DEFAULT_JNLP_IMAGE, containers.get("jnlp").getImage());
+        assertThat(pod.getMetadata().getLabels(), hasEntry("jenkins", "slave"));
+    }
+
+    @Test
+    @TestCaseName("{method}(directConnection={0})")
+    @Parameters({ "true", "false" })
+    public void testValidateDockerRegistryPrefixOverrideWithSlashSuffix(boolean directConnection) throws Exception {
+        cloud.setDirectConnection(directConnection);
+        DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX = "jenkins.docker.com/docker-hub/";
+        PodTemplate template = new PodTemplate();
+        template.setYaml(loadYamlFile("pod-busybox.yaml"));
+        setupStubs();
+        Pod pod = new PodTemplateBuilder(template).withSlave(slave).build();
+        // check containers
+        Map<String, Container> containers = toContainerMap(pod);
+        assertEquals(2, containers.size());
+
+        assertEquals("busybox", containers.get("busybox").getImage());
+        assertEquals(DEFAULT_JNLP_DOCKER_REGISTRY_PREFIX + DEFAULT_JNLP_IMAGE, containers.get("jnlp").getImage());
+        assertThat(pod.getMetadata().getLabels(), hasEntry("jenkins", "slave"));
     }
 
     @Test
@@ -714,6 +756,17 @@ public class PodTemplateBuilderTest {
         Container jnlp = containers.get("jnlp");
 		assertEquals("Wrong number of volume mounts: " + jnlp.getVolumeMounts(), 1, jnlp.getVolumeMounts().size());
         validateContainers(pod, slave, directConnection);
+    }
+
+    @Test
+    public void whenRuntimeClassNameIsSetDoNotSetDefaultNodeSelector() {
+        setupStubs();
+        PodTemplate pt = new PodTemplate();
+        pt.setYaml("spec:\n" +
+                "  runtimeClassName: windows");
+        Pod pod = new PodTemplateBuilder(pt).withSlave(slave).build();
+        assertEquals("windows", pod.getSpec().getRuntimeClassName());
+        assertThat(pod.getSpec().getNodeSelector(), anEmptyMap());
     }
 
     private Map<String, Container> toContainerMap(Pod pod) {

@@ -28,6 +28,7 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 
 import com.google.common.annotations.VisibleForTesting;
+import hudson.slaves.NodeProperty;
 import org.apache.commons.lang.StringUtils;
 import org.csanchez.jenkins.plugins.kubernetes.model.TemplateEnvVar;
 import org.csanchez.jenkins.plugins.kubernetes.volumes.PodVolume;
@@ -37,6 +38,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import hudson.Util;
 import hudson.model.Label;
@@ -73,6 +75,10 @@ public class PodTemplateUtils {
     private static final Logger LOGGER = Logger.getLogger(PodTemplateUtils.class.getName());
 
     private static final Pattern LABEL_VALIDATION = Pattern.compile("[a-zA-Z0-9]([_\\.\\-a-zA-Z0-9]*[a-zA-Z0-9])?");
+
+    @SuppressFBWarnings(value = "MS_SHOULD_BE_FINAL", justification = "tests & emergency admin")
+    @VisibleForTesting
+    public static boolean SUBSTITUTE_ENV = Boolean.getBoolean(PodTemplateUtils.class.getName() + ".SUBSTITUTE_ENV");
 
     /**
      * Combines a {@link ContainerTemplate} with its parent.
@@ -373,8 +379,8 @@ public class PodTemplateUtils {
         WorkspaceVolume workspaceVolume = WorkspaceVolume.merge(parent.getWorkspaceVolume(), template.getWorkspaceVolume());
 
         //Tool location node properties
-        PodTemplateToolLocation toolLocationNodeProperties = parent.getNodeProperties();
-        toolLocationNodeProperties.addAll(template.getNodeProperties());
+        List<NodeProperty<?>> nodeProperties = new ArrayList<>(parent.getNodeProperties());
+        nodeProperties.addAll(template.getNodeProperties());
 
         PodTemplate podTemplate = new PodTemplate(template.getId());
         podTemplate.setName(name);
@@ -388,7 +394,7 @@ public class PodTemplateUtils {
         podTemplate.setVolumes(new ArrayList<>(combinedVolumes.values()));
         podTemplate.setImagePullSecrets(new ArrayList<>(imagePullSecrets));
         podTemplate.setAnnotations(new ArrayList<>(podAnnotations));
-        podTemplate.setNodeProperties(toolLocationNodeProperties);
+        podTemplate.setNodeProperties(nodeProperties);
         podTemplate.setNodeUsageMode(nodeUsageMode);
         podTemplate.setYamlMergeStrategy(template.getYamlMergeStrategy());
         podTemplate.setInheritFrom(!Strings.isNullOrEmpty(template.getInheritFrom()) ?
@@ -518,21 +524,11 @@ public class PodTemplateUtils {
      * Substitutes a placeholder with a value found in the environment.
      * @param s     The placeholder. Should be use the format: ${placeholder}.
      * @return      The substituted value if found, or the input value otherwise.
-     */
-    public static String substituteEnv(String s) {
-        return replaceMacro(s, System.getenv());
-    }
-
-    /**
-     * Substitutes a placeholder with a value found in the environment.
-     * @deprecated check if it is null or empty in the caller method, then use {@link #substituteEnv(String)}
-     * @param s             The placeholder. Should be use the format: ${placeholder}.
-     * @param defaultValue  The default value to return if no match is found.
-     * @return              The substituted value if found, or the default value otherwise.
+     * @deprecated Potentially insecure; a no-op by default.
      */
     @Deprecated
-    public static String substituteEnv(String s, String defaultValue) {
-        return substitute(s, System.getenv(), defaultValue);
+    public static String substituteEnv(String s) {
+        return SUBSTITUTE_ENV ? replaceMacro(s, System.getenv()) : s;
     }
 
     /**

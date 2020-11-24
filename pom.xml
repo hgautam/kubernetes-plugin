@@ -39,7 +39,7 @@
   </developers>
 
   <properties>
-    <revision>1.28.1</revision>
+    <revision>1.28.4</revision>
     <changelist>-SNAPSHOT</changelist>
     <!-- in minikube
     minikube ip | sed -e 's/\([0-9]*\.[0-9]*\.[0-9]*\).*/\1.1/' -->
@@ -51,6 +51,7 @@
     <no-test-jar>false</no-test-jar>
     <pipeline-model-definition.version>1.7.2</pipeline-model-definition.version>
     <useBeta>true</useBeta>
+    <jenkins-test-harness.version>2.71</jenkins-test-harness.version>
   </properties>
 
   <dependencies>

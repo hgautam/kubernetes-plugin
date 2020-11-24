@@ -530,7 +530,7 @@ public class KubernetesCloud extends Cloud {
     }
 
     @Override
-    public synchronized Collection<NodeProvisioner.PlannedNode> provision(@NonNull final Cloud.CloudState state, final int excessWorkload) {
+    public Collection<NodeProvisioner.PlannedNode> provision(@NonNull final Cloud.CloudState state, final int excessWorkload) {
         try {
             Metrics.metricRegistry().meter(metricNameForLabel(state.getLabel())).mark(excessWorkload);
             Label label = state.getLabel();
@@ -1001,7 +1001,9 @@ public class KubernetesCloud extends Cloud {
         if (podLabels == null && labels != null) {
             setPodLabels(PodLabel.fromMap(labels));
         }
-
+        if (containerCap != null && containerCap == 0) {
+            containerCap = null;
+        }
         return this;
     }
 

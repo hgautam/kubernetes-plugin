@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
 
 import hudson.AbortException;
 import io.fabric8.kubernetes.api.model.Container;
@@ -334,8 +335,8 @@ public class ContainerExecDecorator extends LauncherDecorator implements Seriali
                         }
                     }
                 }
-                return doLaunch(starter.quiet(), envVars, starter.stdout(), containerWorkingDirFilePath, starter.masks(),
-                        getCommands(starter, containerWorkingDirFilePathStr));
+                return doLaunch(starter.quiet(), fixDoubleDollar(envVars), starter.stdout(), containerWorkingDirFilePath, starter.masks(),
+                        getCommands(starter, containerWorkingDirFilePathStr, launcher.isUnix()));
             }
 
             private Proc doLaunch(boolean quiet, String[] cmdEnvs, OutputStream outputForCaller, FilePath pwd,
@@ -363,7 +364,7 @@ public class ContainerExecDecorator extends LauncherDecorator implements Seriali
                 }
 
                 // Send to proc caller as well if they sent one
-                if (outputForCaller != null && !outputForCaller.equals(stream)) {
+                if (outputForCaller != null && !outputForCaller.equals(printStream)) {
                     stream = new TeeOutputStream(outputForCaller, stream);
                 }
                 ByteArrayOutputStream error = new ByteArrayOutputStream();
@@ -648,12 +649,16 @@ public class ContainerExecDecorator extends LauncherDecorator implements Seriali
         }
     }
 
-    static String[] getCommands(Launcher.ProcStarter starter, String containerWorkingDirStr) {
+    static String[] getCommands(Launcher.ProcStarter starter, String containerWorkingDirStr, boolean unix) {
         List<String> allCommands = new ArrayList<String>();
 
-        // BourneShellScript.launchWithCookie escapes $ as $$, we convert it to \$
+
         for (String cmd : starter.cmds()) {
-            String fixedCommand = cmd.replaceAll("\\$\\$", "\\\\\\$");
+            // BourneShellScript.launchWithCookie escapes $ as $$, we convert it to \$
+            String fixedCommand = cmd.replaceAll("\\$\\$", Matcher.quoteReplacement("\\$"));
+            if (unix) {
+                fixedCommand = fixedCommand.replaceAll("\\\"", Matcher.quoteReplacement("\\\""));
+            }
 
             String oldRemoteDir = null;
             FilePath oldRemoteDirFilepath = starter.pwd();
@@ -690,5 +695,11 @@ public class ContainerExecDecorator extends LauncherDecorator implements Seriali
     @Deprecated
     public void setKubernetesClient(KubernetesClient client) {
         // NOOP
+    }
+
+    private static String[] fixDoubleDollar(String[] envVars) {
+        return Arrays.stream(envVars)
+                .map(ev -> ev.replaceAll("\\$\\$", Matcher.quoteReplacement("$")))
+                .toArray(String[]::new);
     }
 }

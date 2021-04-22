@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -104,8 +103,10 @@ public class PodTemplateUtils {
         boolean ttyEnabled = template.isTtyEnabled() ? template.isTtyEnabled() : (parent.isTtyEnabled() ? parent.isTtyEnabled() : false);
         String resourceRequestCpu = Strings.isNullOrEmpty(template.getResourceRequestCpu()) ? parent.getResourceRequestCpu() : template.getResourceRequestCpu();
         String resourceRequestMemory = Strings.isNullOrEmpty(template.getResourceRequestMemory()) ? parent.getResourceRequestMemory() : template.getResourceRequestMemory();
+        String resourceRequestEphemeralStorage = Strings.isNullOrEmpty(template.getResourceRequestEphemeralStorage()) ? parent.getResourceRequestEphemeralStorage() : template.getResourceRequestEphemeralStorage();
         String resourceLimitCpu = Strings.isNullOrEmpty(template.getResourceLimitCpu()) ? parent.getResourceLimitCpu() : template.getResourceLimitCpu();
         String resourceLimitMemory = Strings.isNullOrEmpty(template.getResourceLimitMemory()) ? parent.getResourceLimitMemory() : template.getResourceLimitMemory();
+        String resourceLimitEphemeralStorage = Strings.isNullOrEmpty(template.getResourceLimitEphemeralStorage()) ? parent.getResourceLimitEphemeralStorage() : template.getResourceLimitEphemeralStorage();
         Map<String, PortMapping> ports = parent.getPorts().stream()
                 .collect(Collectors.toMap(PortMapping::getName, Function.identity()));
         template.getPorts().stream().forEach(p -> ports.put(p.getName(), p));
@@ -119,8 +120,10 @@ public class PodTemplateUtils {
         combined.setTtyEnabled(ttyEnabled);
         combined.setResourceLimitCpu(resourceLimitCpu);
         combined.setResourceLimitMemory(resourceLimitMemory);
+        combined.setResourceLimitEphemeralStorage(resourceLimitEphemeralStorage);
         combined.setResourceRequestCpu(resourceRequestCpu);
         combined.setResourceRequestMemory(resourceRequestMemory);
+        combined.setResourceRequestEphemeralStorage(resourceRequestEphemeralStorage);
         combined.setWorkingDir(workingDir);
         combined.setPrivileged(privileged);
         combined.setRunAsUser(runAsUser);
@@ -244,6 +247,12 @@ public class PodTemplateUtils {
         String serviceAccount = Strings.isNullOrEmpty(template.getSpec().getServiceAccount())
                 ? parent.getSpec().getServiceAccount()
                 : template.getSpec().getServiceAccount();
+        String serviceAccountName = Strings.isNullOrEmpty(template.getSpec().getServiceAccountName())
+                ? parent.getSpec().getServiceAccountName()
+                : template.getSpec().getServiceAccountName();
+        String schedulerName = Strings.isNullOrEmpty(template.getSpec().getSchedulerName())
+                ? parent.getSpec().getSchedulerName()
+                 : template.getSpec().getSchedulerName();
 
         Boolean hostNetwork = template.getSpec().getHostNetwork() != null
                 ? template.getSpec().getHostNetwork()
@@ -258,12 +267,10 @@ public class PodTemplateUtils {
         imagePullSecrets.addAll(template.getSpec().getImagePullSecrets());
 
         // Containers
-        Map<String, Container> combinedContainers = new HashMap<>();
-        Map<String, Container> parentContainers = parent.getSpec().getContainers().stream()
-                .collect(toMap(c -> c.getName(), c -> c));
-        combinedContainers.putAll(parentContainers);
-        combinedContainers.putAll(template.getSpec().getContainers().stream()
-                .collect(toMap(c -> c.getName(), c -> combine(parentContainers.get(c.getName()), c))));
+        List<Container> combinedContainers = combineContainers(parent.getSpec().getContainers(), template.getSpec().getContainers());
+
+        // Init containers
+        List<Container> combinedInitContainers = combineContainers(parent.getSpec().getInitContainers(), template.getSpec().getInitContainers());
 
         // Volumes
         List<Volume> combinedVolumes = combineVolumes(parent.getSpec().getVolumes(), template.getSpec().getVolumes());
@@ -293,8 +300,11 @@ public class PodTemplateUtils {
                 .withNewSpecLike(parent.getSpec()) //
                 .withNodeSelector(nodeSelector) //
                 .withServiceAccount(serviceAccount) //
+                .withServiceAccountName(serviceAccountName) //
+                .withSchedulerName(schedulerName)
                 .withHostNetwork(hostNetwork) //
-                .withContainers(Lists.newArrayList(combinedContainers.values())) //
+                .withContainers(combinedContainers) //
+                .withInitContainers(combinedInitContainers) //
                 .withVolumes(combinedVolumes) //
                 .withTolerations(combinedTolerations) //
                 .withImagePullSecrets(Lists.newArrayList(imagePullSecrets));
@@ -328,6 +338,18 @@ public class PodTemplateUtils {
         return pod;
     }
 
+    @Nonnull
+    private static List<Container> combineContainers(List<Container> parent, List<Container> child) {
+        LinkedHashMap<String, Container> combinedContainers = new LinkedHashMap<>(); // Need to retain insertion order
+        Map<String, Container> parentContainers = parent.stream()
+                .collect(toMap(Container::getName, c -> c));
+        Map<String, Container> childContainers = child.stream()
+                .collect(toMap(Container::getName, c -> combine(parentContainers.get(c.getName()), c)));
+        combinedContainers.putAll(parentContainers);
+        combinedContainers.putAll(childContainers);
+        return new ArrayList<>(combinedContainers.values());
+    }
+
     private static List<Volume> combineVolumes(@Nonnull List<Volume> volumes1, @Nonnull List<Volume> volumes2) {
         Map<String, Volume> volumesByName = volumes1.stream().collect(Collectors.toMap(Volume::getName, Function.identity()));
         volumes2.forEach(v -> volumesByName.put(v.getName(), v));
@@ -353,6 +375,7 @@ public class PodTemplateUtils {
         String label = template.getLabel();
         String nodeSelector = Strings.isNullOrEmpty(template.getNodeSelector()) ? parent.getNodeSelector() : template.getNodeSelector();
         String serviceAccount = Strings.isNullOrEmpty(template.getServiceAccount()) ? parent.getServiceAccount() : template.getServiceAccount();
+        String schedulerName = Strings.isNullOrEmpty(template.getSchedulerName()) ? parent.getSchedulerName() : template.getSchedulerName();
         Node.Mode nodeUsageMode = template.getNodeUsageMode() == null ? parent.getNodeUsageMode() : template.getNodeUsageMode();
 
         Set<PodAnnotation> podAnnotations = new LinkedHashSet<>();
@@ -388,6 +411,7 @@ public class PodTemplateUtils {
         podTemplate.setLabel(label);
         podTemplate.setNodeSelector(nodeSelector);
         podTemplate.setServiceAccount(serviceAccount);
+        podTemplate.setSchedulerName(schedulerName);
         podTemplate.setEnvVars(combineEnvVars(parent, template));
         podTemplate.setContainers(new ArrayList<>(combinedContainers.values()));
         podTemplate.setWorkspaceVolume(workspaceVolume);
@@ -415,6 +439,9 @@ public class PodTemplateUtils {
 
         podTemplate.setServiceAccount(!Strings.isNullOrEmpty(template.getServiceAccount()) ?
                                       template.getServiceAccount() : parent.getServiceAccount());
+
+        podTemplate.setSchedulerName(!Strings.isNullOrEmpty(template.getSchedulerName()) ?
+                                      template.getSchedulerName() : parent.getSchedulerName());
 
         podTemplate.setPodRetention(template.getPodRetention());
         podTemplate.setShowRawYaml(template.isShowRawYamlSet() ? template.isShowRawYaml() : parent.isShowRawYaml());

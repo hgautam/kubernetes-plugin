@@ -13,7 +13,7 @@ automates the scaling of Jenkins agents running in Kubernetes.
 The plugin creates a Kubernetes Pod for each agent started,
 defined by the Docker image to run, and stops it after each build.
 
-Agents are launched using JNLP, so it is expected that the image connects automatically to the Jenkins master.
+Agents are launched using JNLP, so it is expected that the image connects automatically to the Jenkins controller.
 For that some environment variables are automatically injected:
 
 * `JENKINS_URL`: Jenkins web interface url
@@ -24,7 +24,7 @@ For that some environment variables are automatically injected:
 Tested with [`jenkins/inbound-agent`](https://hub.docker.com/r/jenkins/inbound-agent),
 see the [Docker image source code](https://github.com/jenkinsci/docker-inbound-agent).
 
-It is not required to run the Jenkins master inside Kubernetes. 
+It is not required to run the Jenkins controller inside Kubernetes. 
 # Generic Setup
 ### Prerequisites
 * A running Kubernetes cluster 1.14 or later. For OpenShift users, this means OpenShift Container Platform 4.x.
@@ -69,13 +69,15 @@ _Name_, _Kubernetes URL_, _Kubernetes server certificate key_, ...
 
 If _Kubernetes URL_ is not set, the connection options will be autoconfigured from service account or kube config file.
 
-When running the Jenkins master outside of Kubernetes you will need to set the credential to secret text. The value of the credential will be the token of the service account you created for Jenkins in the cluster the agents will run on.
+When running the Jenkins controller outside of Kubernetes you will need to set the credential to secret text. The value of the credential will be the token of the service account you created for Jenkins in the cluster the agents will run on.
 
 If you check **WebSocket** then agents will connect over HTTP(S) rather than the Jenkins service TCP port.
-This is unnecessary when the Jenkins master runs in the same Kubernetes cluster,
+This is unnecessary when the Jenkins controller runs in the same Kubernetes cluster,
 but can greatly simplify setup when agents are in an external cluster
-and the Jenkins master is not directly accessible (for example, it is behind a reverse proxy).
+and the Jenkins controller is not directly accessible (for example, it is behind a reverse proxy).
 See [JEP-222](https://jenkins.io/jep/222) for more.
+
+> **Note:** if your Jenkins controller is outside of the cluster and uses a self-signed HTTPS certificate, you will need some [additional configuration](#using-websockets-with-a-jenkins-master-with-self-signed-https-certificate).
 
 ### Restricting what jobs can use your configured cloud
 
@@ -102,13 +104,15 @@ podTemplate {
 }
 ```
 
-This will be container specific
+This will be container specific.
+Note the variable `POD_CONTAINER` contains the name of the container in the current context. It is defined only within a `container` block.
+
 ```groovy
 podTemplate(containers: […]) {
   node(POD_LABEL) {
     stage('Run shell') {
       container('mycontainer') {
-        sh 'echo hello world'
+        sh "echo hello from $POD_CONTAINER" // displays 'hello from mycontainer'
       }
     }
   }
@@ -234,23 +238,23 @@ In order to support any possible value in Kubernetes `Pod` object, we can pass a
 for the template. If any other properties are set outside of the yaml they will take precedence.
 
 ```groovy
-podTemplate(yaml: """
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    some-label: some-label-value
-spec:
-  containers:
-  - name: busybox
-    image: busybox
-    command:
-    - cat
-    tty: true
-"""
-) {
+podTemplate(yaml: """\
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      labels: 
+        some-label: some-label-value
+    spec:
+      containers:
+      - name: busybox
+        image: busybox
+        command:
+        - cat
+        tty: true
+    """.stripIndent()) {
     node(POD_LABEL) {
       container('busybox') {
+        echo POD_CONTAINER // displays 'busybox'
         sh "hostname"
       }
     }
@@ -352,10 +356,10 @@ slaveTemplates.dockerTemplate {
   slaveTemplates.mavenTemplate {
     node(POD_LABEL) {
       container('docker') {
-        sh 'echo hello from docker'
+        sh "echo hello from $POD_CONTAINER" // displays 'hello from docker'
       }
       container('maven') {
-        sh 'echo hello from maven'
+        sh "echo hello from $POD_CONTAINER" // displays 'hello from maven'
       }
      }
   }
@@ -424,25 +428,25 @@ Declarative agents can be defined from yaml
 pipeline {
   agent {
     kubernetes {
-      yaml """
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    some-label: some-label-value
-spec:
-  containers:
-  - name: maven
-    image: maven:alpine
-    command:
-    - cat
-    tty: true
-  - name: busybox
-    image: busybox
-    command:
-    - cat
-    tty: true
-"""
+      yaml """\
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          labels:
+            some-label: some-label-value
+        spec:
+          containers:
+          - name: maven
+            image: maven:alpine
+            command:
+            - cat
+            tty: true
+          - name: busybox
+            image: busybox
+            command:
+            - cat
+            tty: true
+        """.stripIndent()
     }
   }
   stages {
@@ -494,6 +498,28 @@ pipeline {
 }
 ```
 
+Run steps within a container by default. Steps will be nested within an implicit `container(name) {...}` block instead
+of being executed in the jnlp container.
+
+```
+pipeline {
+  agent {
+    kubernetes {
+      defaultContainer 'maven'
+      yamlFile 'KubernetesPod.yaml'
+    }
+  }
+
+  stages {
+    stage('Run maven') {
+      steps {
+        sh 'mvn -version'
+      }
+    }
+  }
+}
+```
+
 Run the Pipeline or individual stage within a custom workspace - not required unless explicitly stated.
 
 ```
@@ -525,15 +551,15 @@ pipeline {
   agent {
     kubernetes {
       label 'parent-pod'
-      yaml """
-spec:
-  containers:
-  - name: golang
-    image: golang:1.6.3-alpine
-    command:
-    - cat
-    tty: true
-"""
+      yaml """\
+        spec:
+        containers:
+        - name: golang
+            image: golang:1.6.3-alpine
+            command:
+            - cat
+            tty: true
+        """.stripIndent()
     }
   }
   stages {
@@ -541,15 +567,15 @@ spec:
         agent {
             kubernetes {
                 label 'nested-pod'
-                yaml """
-spec:
-  containers:
-  - name: maven
-    image: maven:3.3.9-jdk-8-alpine
-    command:
-    - cat
-    tty: true
-"""
+                yaml """\
+                    spec:
+                    containers:
+                    - name: maven
+                        image: maven:3.3.9-jdk-8-alpine
+                        command:
+                        - cat
+                        tty: true
+                    """.stripIndent()
             }
         }
       steps {
@@ -627,7 +653,7 @@ Other containers must run a long running process, so the container does not exit
 just runs something and exit then it should be overridden with something like `cat` with `ttyEnabled: true`.
 
 **WARNING**
-If you want to provide your own Docker image for the JNLP agent, you **must** name the container `jnlp` so it overrides the default one. Failing to do so will result in two agents trying to concurrently connect to the master.
+If you want to provide your own Docker image for the JNLP agent, you **must** name the container `jnlp` so it overrides the default one. Failing to do so will result in two agents trying to concurrently connect to the controller.
 
 
 
@@ -687,7 +713,7 @@ If they are `Running`, use `logs` to get the log output
 
     kubectl logs -f pods/my-jenkins-agent jnlp
 
-If pods are not started or for any other error, check the logs on the master side.
+If pods are not started or for any other error, check the logs on the controller side.
 
 For more detail, configure a new [Jenkins log recorder](https://wiki.jenkins-ci.org/display/JENKINS/Logging) for
 `org.csanchez.jenkins.plugins.kubernetes` at `ALL` level.
@@ -726,6 +752,31 @@ spec:
     - cat
     tty: true
 ```
+
+## Using WebSockets with a Jenkins controller with self-signed HTTPS certificate
+
+Using WebSockets is the easiest and recommended way to establish the connection between agents and a Jenkins controller running outside of the cluster.
+However, if your Jenkins controller has HTTPS configured with self-signed certificate, you'll need to make sure the agent container trusts the CA.
+To do that, you can extend the `jenkins/inbound-agent` image and add your certificate as follows:
+
+```Dockerfile
+FROM jenkins/inbound-agent
+
+USER root
+
+ADD cert.pem /tmp/cert.pem
+
+RUN keytool -noprompt -storepass changeit \
+  -keystore "$JAVA_HOME/jre/lib/security/cacerts" \
+  -import -file /tmp/cert.pem -alias jenkinsMaster && \
+  rm -f /tmp/cert.pem
+
+USER jenkins
+```
+
+Then, use it as the `jnlp` container for the pod template as usual. No command or args need to be specified.
+
+> **Note:** when using the WebSocket mode, the `-disableHttpsCertValidation` on the `jenkins/inbound-agent` becomes unavailable, as well as `-cert`, and that's why you have to extend the docker image.
 
 # Building and Testing
 
@@ -798,7 +849,7 @@ bash test-in-k8s.sh
 # Docker image
 
 Docker image for Jenkins, with plugin installed.
-Based on the [official image](https://registry.hub.docker.com/_/jenkins/).
+Based on the [official image](https://hub.docker.com/r/jenkins/jenkins/).
 
 ## Running the Docker image
 

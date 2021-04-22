@@ -205,6 +205,7 @@ public class KubernetesPipelineTest extends AbstractKubernetesPipelineTest {
         SemaphoreStep.success("after-podtemplate/1", null);
 
         r.assertBuildStatusSuccess(r.waitForCompletion(b));
+        r.assertLogContains("container=busybox", b);
         r.assertLogContains("script file contents: ", b);
         assertFalse("There are pods leftover after test execution, see previous logs",
                 deletePods(cloud.connect(), getLabels(cloud, this, name), true));
@@ -685,6 +686,11 @@ public class KubernetesPipelineTest extends AbstractKubernetesPipelineTest {
         PodTemplateUtils.SUBSTITUTE_ENV = true;
         b = r.buildAndAssertSuccess(p);
         r.assertLogContains("xxx" + home + "xxx", b);
+    }
+
+    @Test
+    public void octalPermissions() throws Exception {
+        r.assertBuildStatusSuccess(r.waitForCompletion(b));
     }
 
     private <R extends Run> R assertBuildStatus(R run, Result... status) throws Exception {

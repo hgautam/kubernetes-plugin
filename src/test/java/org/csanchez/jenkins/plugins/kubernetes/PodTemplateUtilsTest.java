@@ -40,6 +40,7 @@ import java.util.Map;
 import org.csanchez.jenkins.plugins.kubernetes.model.KeyValueEnvVar;
 import org.csanchez.jenkins.plugins.kubernetes.model.SecretEnvVar;
 import org.csanchez.jenkins.plugins.kubernetes.volumes.HostPathVolume;
+import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.Issue;
 
@@ -62,8 +63,12 @@ import io.fabric8.kubernetes.api.model.SecretEnvSource;
 import io.fabric8.kubernetes.api.model.Toleration;
 import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
+import org.jvnet.hudson.test.JenkinsRule;
 
 public class PodTemplateUtilsTest {
+
+    @Rule
+    public JenkinsRule j = new JenkinsRule();
 
     private static final PodImagePullSecret SECRET_1 = new PodImagePullSecret("secret1");
     private static final PodImagePullSecret SECRET_2 = new PodImagePullSecret("secret2");
@@ -299,6 +304,50 @@ public class PodTemplateUtilsTest {
                 .findFirst().orElse(null);
         assertNotNull(mavenTemplate);
         assertEquals("maven:2", mavenTemplate.getImage());
+    }
+
+    @Test
+    public void shouldCombineInitContainers() {
+        Pod parentPod = new PodBuilder()
+                .withNewMetadata().endMetadata()
+                .withNewSpec()
+                    .withInitContainers(new ContainerBuilder().withName("init-parent").build())
+                .endSpec()
+                .build();
+        Pod childPod = new PodBuilder()
+                .withNewMetadata().endMetadata()
+                .withNewSpec()
+                .withInitContainers(new ContainerBuilder().withName("init-child").build())
+                .endSpec()
+                .build();
+
+        Pod combinedPod = combine(parentPod, childPod);
+        List<Container> initContainers = combinedPod.getSpec().getInitContainers();
+        assertThat(initContainers, hasSize(2));
+        assertThat(initContainers.get(0).getName(), equalTo("init-parent"));
+        assertThat(initContainers.get(1).getName(), equalTo("init-child"));
+    }
+
+    @Test
+    public void childShouldOverrideParentInitContainer() {
+        Pod parentPod = new PodBuilder()
+                .withNewMetadata().endMetadata()
+                .withNewSpec()
+                .withInitContainers(new ContainerBuilder().withName("init").withNewImage("image-parent").build())
+                .endSpec()
+                .build();
+        Pod childPod = new PodBuilder()
+                .withNewMetadata().endMetadata()
+                .withNewSpec()
+                .withInitContainers(new ContainerBuilder().withName("init").withNewImage("image-child").build())
+                .endSpec()
+                .build();
+
+        Pod combinedPod = combine(parentPod, childPod);
+        List<Container> initContainers = combinedPod.getSpec().getInitContainers();
+        assertThat(initContainers, hasSize(1));
+        assertThat(initContainers.get(0).getName(), equalTo("init"));
+        assertThat(initContainers.get(0).getImage(), equalTo("image-child"));
     }
 
     @Test

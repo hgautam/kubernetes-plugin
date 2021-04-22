@@ -94,6 +94,11 @@ public class KubernetesSlave extends AbstractCloudSlave {
         return template;
     }
 
+    @Nonnull
+    public String getTemplateId() {
+        return podTemplateId;
+    }
+
     @CheckForNull
     public PodTemplate getTemplateOrNull() {
         if (template == null) {

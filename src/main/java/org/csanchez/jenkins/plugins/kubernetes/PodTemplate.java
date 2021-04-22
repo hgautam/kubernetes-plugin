@@ -115,7 +115,16 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
 
     private String label;
 
+    /**
+     * Set of label atoms this pod template provides in Jenkins. Jenkins indexes them on creation.
+     */
+    private transient Set<LabelAtom> labelSet;
+
+    private transient Map<String, String> labelsMap;
+
     private String serviceAccount;
+
+    private String schedulerName;
 
     private String nodeSelector;
 
@@ -125,9 +134,13 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
 
     private String resourceRequestMemory;
 
+    private String resourceRequestEphemeralStorage;
+
     private String resourceLimitCpu;
 
     private String resourceLimitMemory;
+
+    private String resourceLimitEphemeralStorage;
 
     private Boolean hostNetwork;
 
@@ -199,6 +212,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
         } else {
             this.id = id;
         }
+        recomputeLabelDerivedFields();
     }
 
     public PodTemplate(PodTemplate from) {
@@ -206,6 +220,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
         xs.unmarshal(XStream2.getDefaultDriver().createReader(new StringReader(xs.toXML(from))), this);
         this.yamls = from.yamls;
         this.listener = from.listener;
+        recomputeLabelDerivedFields();
     }
 
     @Deprecated
@@ -417,21 +432,11 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     }
 
     public Set<LabelAtom> getLabelSet() {
-        return Label.parse(label);
+        return labelSet;
     }
 
     public Map<String, String> getLabelsMap() {
-        if (label == null) {
-            return ImmutableMap.of(
-                    "jenkins/label", DEFAULT_LABEL,
-                    "jenkins/label-digest", "0"
-            );
-        } else {
-            return ImmutableMap.of(
-                    "jenkins/label", sanitizeLabel(label),
-                    "jenkins/label-digest", LABEL_DIGEST_FUNCTION.hashString(label).toString()
-            );
-        }
+        return labelsMap;
     }
 
     static String sanitizeLabel(String input) {
@@ -451,6 +456,22 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     @DataBoundSetter
     public void setLabel(String label) {
         this.label = Util.fixEmptyAndTrim(label);
+        recomputeLabelDerivedFields();
+    }
+
+    private void recomputeLabelDerivedFields() {
+        this.labelSet = Label.parse(label);
+        if (label == null) {
+            labelsMap = ImmutableMap.of(
+                    "jenkins/label", DEFAULT_LABEL,
+                    "jenkins/label-digest", "0"
+            );
+        } else {
+            labelsMap = ImmutableMap.of(
+                    "jenkins/label", sanitizeLabel(label),
+                    "jenkins/label-digest", LABEL_DIGEST_FUNCTION.hashString(label).toString()
+            );
+        }
     }
 
     public String getLabel() {
@@ -546,6 +567,15 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     @DataBoundSetter
     public void setServiceAccount(String serviceAccount) {
         this.serviceAccount = Util.fixEmpty(serviceAccount);
+    }
+
+    public String getSchedulerName() {
+        return schedulerName;
+    }
+
+    @DataBoundSetter
+    public void setSchedulerName(String schedulerName) {
+        this.schedulerName = Util.fixEmpty(schedulerName);
     }
 
     @Deprecated
@@ -663,7 +693,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
         getFirstContainer().ifPresent((i) -> i.setResourceLimitCpu(resourceLimitCpu));
     }
 
-    @Deprecated
+        @Deprecated
     public String getResourceLimitMemory() {
         return getFirstContainer().map(ContainerTemplate::getResourceLimitMemory).orElse(null);
     }
@@ -730,7 +760,6 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
     /**
      * @return The persisted yaml fragment
      */
-    @Restricted(NoExternalUse.class) // Tests and UI
     public String getYaml() {
         return yaml;
     }
@@ -811,10 +840,12 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
             containerTemplate.setRunAsGroup(getRunAsGroup());
             containerTemplate.setAlwaysPullImage(alwaysPullImage);
             containerTemplate.setEnvVars(envVars);
-            containerTemplate.setResourceRequestMemory(resourceRequestMemory);
-            containerTemplate.setResourceLimitCpu(resourceLimitCpu);
             containerTemplate.setResourceLimitMemory(resourceLimitMemory);
+            containerTemplate.setResourceLimitCpu(resourceLimitCpu);
+            containerTemplate.setResourceLimitEphemeralStorage(resourceLimitEphemeralStorage);
+            containerTemplate.setResourceRequestMemory(resourceRequestMemory);
             containerTemplate.setResourceRequestCpu(resourceRequestCpu);
+            containerTemplate.setResourceRequestEphemeralStorage(resourceRequestEphemeralStorage);
             containerTemplate.setWorkingDir(remoteFs);
             containers.add(containerTemplate);
         }
@@ -845,6 +876,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
             // Use the label and a digest of the current object representation to get the same value every restart if the object isn't saved.
             id = getLabel() + "-" + Util.getDigestOf(toString());
         }
+        recomputeLabelDerivedFields();
 
         return this;
     }
@@ -860,7 +892,7 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
      * @param slave
      */
     public Pod build(KubernetesSlave slave) {
-        return new PodTemplateBuilder(this).withSlave(slave).build();
+        return new PodTemplateBuilder(this, slave).build();
     }
 
     /**
@@ -895,8 +927,10 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
             StringBuilder optional = new StringBuilder();
             optionalField(optional, "resourceRequestCpu", ct.getResourceRequestCpu());
             optionalField(optional, "resourceRequestMemory", ct.getResourceRequestMemory());
+            optionalField(optional, "resourceRequestEphemeralStorage", ct.getResourceRequestEphemeralStorage());
             optionalField(optional, "resourceLimitCpu", ct.getResourceLimitCpu());
             optionalField(optional, "resourceLimitMemory", ct.getResourceLimitMemory());
+            optionalField(optional, "resourceLimitEphemeralStorage", ct.getResourceLimitEphemeralStorage());
             if (optional.length() > 0) {
                 sb.append("(").append(optional).append(")");
             }
@@ -995,12 +1029,15 @@ public class PodTemplate extends AbstractDescribableImpl<PodTemplate> implements
                 (activeDeadlineSeconds == 0 ? "" : ", activeDeadlineSeconds=" + activeDeadlineSeconds) +
                 (label == null ? "" : ", label='" + label + '\'') +
                 (serviceAccount == null ? "" : ", serviceAccount='" + serviceAccount + '\'') +
+                (schedulerName == null ? "" : ", schedulerName='" + schedulerName + '\'') +
                 (nodeSelector == null ? "" : ", nodeSelector='" + nodeSelector + '\'') +
                 (nodeUsageMode == null ? "" : ", nodeUsageMode=" + nodeUsageMode) +
                 (resourceRequestCpu == null ? "" : ", resourceRequestCpu='" + resourceRequestCpu + '\'') +
                 (resourceRequestMemory == null ? "" : ", resourceRequestMemory='" + resourceRequestMemory + '\'') +
+                (resourceRequestEphemeralStorage == null ? "" : ", resourceRequestEphemeralStorage='" + resourceRequestEphemeralStorage + '\'') +
                 (resourceLimitCpu == null ? "" : ", resourceLimitCpu='" + resourceLimitCpu + '\'') +
                 (resourceLimitMemory == null ? "" : ", resourceLimitMemory='" + resourceLimitMemory + '\'') +
+                (resourceLimitEphemeralStorage == null ? "" : ", resourceLimitEphemeralStorage='" + resourceLimitEphemeralStorage + '\'') +
                 (workspaceVolume == null ? "" : ", workspaceVolume='" + workspaceVolume + '\'') +
                 (podRetention == null ? "" : ", podRetention='" + podRetention + '\'') +
                 (volumes == null || volumes.isEmpty() ? "" : ", volumes=" + volumes) +
